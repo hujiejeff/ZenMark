@@ -14,7 +14,6 @@ import {
   Loader2,
   Bookmark as BookmarkIcon,
   X,
-  Sparkles,
   Globe,
   ChevronDown,
   Edit2
@@ -64,6 +63,27 @@ const SEARCH_ENGINES = [
   { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=", icon: "https://duckduckgo.com/favicon.ico" },
   { name: "Baidu", url: "https://www.baidu.com/s?wd=", icon: "https://www.baidu.com/favicon.ico" },
 ];
+
+const STORAGE_KEYS = {
+  BOOKMARKS: 'zenmark_bookmarks',
+  CATEGORIES: 'zenmark_categories',
+  SETTINGS: 'zenmark_settings'
+};
+
+const DEFAULT_BOOKMARKS: Bookmark[] = [
+  { id: 1, title: "Google", url: "https://www.google.com", category: "Search", created_at: new Date().toISOString() },
+  { id: 2, title: "GitHub", url: "https://github.com", category: "Tech", created_at: new Date().toISOString() },
+  { id: 3, title: "YouTube", url: "https://www.youtube.com", category: "Video", created_at: new Date().toISOString() },
+  { id: 4, title: "Twitter / X", url: "https://twitter.com", category: "Social", created_at: new Date().toISOString() },
+  { id: 5, title: "Reddit", url: "https://www.reddit.com", category: "Social", created_at: new Date().toISOString() },
+  { id: 6, title: "Stack Overflow", url: "https://stackoverflow.com", category: "Tech", created_at: new Date().toISOString() },
+  { id: 7, title: "ChatGPT", url: "https://chat.openai.com", category: "AI", created_at: new Date().toISOString() },
+  { id: 8, title: "Dribbble", url: "https://dribbble.com", category: "Design", created_at: new Date().toISOString() },
+  { id: 9, title: "Netflix", url: "https://www.netflix.com", category: "Entertainment", created_at: new Date().toISOString() },
+  { id: 10, title: "Wikipedia", url: "https://www.wikipedia.org", category: "Learning", created_at: new Date().toISOString() },
+];
+
+const DEFAULT_CATEGORIES = ["Search", "Tech", "Video", "Social", "AI", "Design", "Entertainment", "Learning"];
 
 export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -115,8 +135,47 @@ export default function App() {
   );
 
   useEffect(() => {
-    fetchBookmarks();
+    // Load from localStorage
+    const savedBookmarks = localStorage.getItem(STORAGE_KEYS.BOOKMARKS);
+    const savedCategories = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
+    const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+
+    if (savedBookmarks) {
+      setBookmarks(JSON.parse(savedBookmarks));
+    } else {
+      setBookmarks(DEFAULT_BOOKMARKS);
+    }
+
+    if (savedCategories) {
+      setCategoryOrder(JSON.parse(savedCategories));
+    } else {
+      setCategoryOrder(DEFAULT_CATEGORIES);
+    }
+
+    if (savedSettings) {
+      setUiSettings(JSON.parse(savedSettings));
+    }
+
+    setIsLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(bookmarks));
+    }
+  }, [bookmarks, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categoryOrder));
+    }
+  }, [categoryOrder, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(uiSettings));
+    }
+  }, [uiSettings, isLoading]);
 
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
@@ -134,82 +193,44 @@ export default function App() {
     });
   };
 
-  const fetchBookmarks = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/bookmarks");
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-      const data = await res.json();
-      setBookmarks(data.bookmarks);
-      
-      // Initialize category order from server categories
-      const cats = data.categories.map((c: any) => c.name);
-      setCategoryOrder(cats);
-    } catch (err) {
-      console.error("Detailed fetch error:", err);
-      setBookmarks([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const addFolder = async (e: React.FormEvent) => {
+  const addFolder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolder.trim()) return;
     
-    try {
-      const res = await fetch("/api/categories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newFolder }),
-      });
-      if (res.ok) {
-        if (!categoryOrder.includes(newFolder)) {
-          setCategoryOrder([...categoryOrder, newFolder]);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to add folder", err);
+    if (!categoryOrder.includes(newFolder)) {
+      setCategoryOrder([...categoryOrder, newFolder]);
     }
     
     setNewFolder("");
     setIsAddingFolder(false);
   };
-  const addBookmark = async (e: React.FormEvent) => {
+
+  const addBookmark = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookmark.title || !newBookmark.url) return;
 
     let category = newBookmark.category === 'new' ? newCategoryName : (newBookmark.category || "Uncategorized");
     
-    try {
-      // If it's a new category, add it to the server first
-      if (category !== "Uncategorized" && !categoryOrder.includes(category)) {
-        await fetch("/api/categories", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: category }),
-        });
-        setCategoryOrder(prev => [...prev, category]);
-      }
-
-      const res = await fetch("/api/bookmarks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newBookmark, category }),
-      });
-      const data = await res.json();
-      setBookmarks([data, ...bookmarks]);
-      setNewBookmark({ title: "", url: "", category: "" });
-      setNewCategoryName("");
-      setIsAdding(false);
-    } catch (err) {
-      console.error("Failed to add bookmark", err);
+    // If it's a new category, add it to the list
+    if (category !== "Uncategorized" && !categoryOrder.includes(category)) {
+      setCategoryOrder(prev => [...prev, category]);
     }
+
+    const bookmark: Bookmark = {
+      id: Date.now(),
+      title: newBookmark.title,
+      url: newBookmark.url,
+      category: category,
+      created_at: new Date().toISOString()
+    };
+
+    setBookmarks([bookmark, ...bookmarks]);
+    setNewBookmark({ title: "", url: "", category: "" });
+    setNewCategoryName("");
+    setIsAdding(false);
   };
 
-  const renameFolder = async (e: React.FormEvent) => {
+  const renameFolder = (e: React.FormEvent) => {
     e.preventDefault();
     const { oldName, newName } = renamingFolderData;
     if (!newName.trim() || oldName === newName) {
@@ -217,57 +238,23 @@ export default function App() {
       return;
     }
 
-    try {
-      // Update category on server (this also updates associated bookmarks)
-      const res = await fetch(`/api/categories/${oldName}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newName }),
-      });
-
-      if (!res.ok) throw new Error("Failed to rename category on server");
-
-      // Update local state
-      setBookmarks(prev => prev.map(b => b.category === oldName ? { ...b, category: newName } : b));
-      setCategoryOrder(prev => prev.map(c => c === oldName ? newName : c));
-      
-      if (activeFolder === oldName) {
-        setActiveFolder(newName);
-      }
-
-      setIsRenamingFolder(false);
-    } catch (err) {
-      console.error("Failed to rename folder", err);
+    // Update local state
+    setBookmarks(prev => prev.map(b => b.category === oldName ? { ...b, category: newName } : b));
+    setCategoryOrder(prev => prev.map(c => c === oldName ? newName : c));
+    
+    if (activeFolder === oldName) {
+      setActiveFolder(newName);
     }
+
+    setIsRenamingFolder(false);
   };
 
-  const deleteBookmark = async (id: number) => {
-    try {
-      await fetch(`/api/bookmarks/${id}`, { method: "DELETE" });
-      setBookmarks(bookmarks.filter((b) => b.id !== id));
-    } catch (err) {
-      console.error("Failed to delete bookmark", err);
-    }
+  const deleteBookmark = (id: number) => {
+    setBookmarks(bookmarks.filter((b) => b.id !== id));
   };
 
-  const updateBookmark = async (id: number, updates: Partial<Bookmark>) => {
-    try {
-      const res = await fetch(`/api/bookmarks/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server returned ${res.status}`);
-      }
-      
-      const data = await res.json();
-      setBookmarks(prev => prev.map(b => b.id === id ? data : b));
-    } catch (err) {
-      console.error("Failed to update bookmark:", err);
-    }
+  const updateBookmark = (id: number, updates: Partial<Bookmark>) => {
+    setBookmarks(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -277,16 +264,8 @@ export default function App() {
     }
   };
 
-  const updateBookmarkCategory = async (id: number, category: string) => {
-    try {
-      await fetch(`/api/bookmarks/${id}/category`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category }),
-      });
-    } catch (err) {
-      console.error("Failed to update bookmark category", err);
-    }
+  const updateBookmarkCategory = (id: number, category: string) => {
+    setBookmarks(prev => prev.map(b => b.id === id ? { ...b, category } : b));
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -462,50 +441,50 @@ export default function App() {
   const standaloneBookmarks = bookmarks.filter(b => !b.category || b.category === 'Uncategorized');
 
   const handleExport = () => {
-    const htmlContent = `
-      <!DOCTYPE NETSCAPE-Bookmark-file-1>
-      <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
-      <TITLE>Bookmarks</TITLE>
-      <H1>Bookmarks</H1>
-      <DL><p>
-        ${bookmarks.map(b => `<DT><A HREF="${b.url}" ADD_DATE="${new Date(b.created_at).getTime() / 1000}">${b.title}</A>`).join('\n')}
-      </DL><p>
-    `;
-    const blob = new Blob([htmlContent], { type: "text/html" });
+    const data = {
+      bookmarks,
+      categories: categoryOrder,
+      settings: uiSettings,
+      version: '1.0',
+      exportDate: new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "zenmark_bookmarks.html";
+    a.download = `zenmark_backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result as string;
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(content, "text/html");
-      const links = Array.from(doc.querySelectorAll("a"));
-
-      setIsImporting(true);
-      for (const link of links) {
-        const title = link.textContent || "Untitled";
-        const url = link.getAttribute("href") || "";
-        if (url) {
-          await fetch("/api/bookmarks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title, url, category: "Imported" }),
-          });
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const data = JSON.parse(content);
+        
+        if (data.bookmarks && Array.isArray(data.bookmarks)) {
+          setBookmarks(data.bookmarks);
         }
+        if (data.categories && Array.isArray(data.categories)) {
+          setCategoryOrder(data.categories);
+        }
+        if (data.settings) {
+          setUiSettings(prev => ({ ...prev, ...data.settings }));
+        }
+        
+        alert("Import successful!");
+      } catch (err) {
+        console.error("Failed to parse JSON backup:", err);
+        alert("Failed to import. Please make sure the file is a valid ZenMark JSON backup.");
       }
-      setIsImporting(false);
-      fetchBookmarks();
     };
     reader.readAsText(file);
+    e.target.value = ''; // Reset input
   };
 
   return (
@@ -1283,8 +1262,6 @@ export default function App() {
                     // Logic to delete folder (delete all bookmarks in category)
                     if (confirm(`Are you sure you want to delete the folder "${contextMenu.id}" and all its bookmarks?`)) {
                       const categoryName = String(contextMenu.id);
-                      fetch(`/api/categories/${categoryName}`, { method: 'DELETE' })
-                        .catch(err => console.error("Failed to delete category", err));
                       
                       const bookmarksToDelete = bookmarks.filter(b => b.category === categoryName);
                       bookmarksToDelete.forEach(b => deleteBookmark(b.id));
