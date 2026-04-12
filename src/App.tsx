@@ -16,7 +16,11 @@ import {
   X,
   Globe,
   ChevronDown,
-  Edit2
+  Edit2,
+  Cloud,
+  RefreshCcw,
+  FileJson,
+  FileCode
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -57,18 +61,47 @@ interface Bookmark {
   roundness?: number;
 }
 
-const SEARCH_ENGINES = [
+const STORAGE_KEYS = {
+  BOOKMARKS: 'zenmark_bookmarks',
+  CATEGORIES: 'zenmark_categories',
+  SETTINGS: 'zenmark_settings',
+  SEARCH_ENGINES: 'zenmark_search_engines',
+  WEBDAV: 'zenmark_webdav'
+};
+
+const DEFAULT_UI_SETTINGS = {
+  itemSize: 120,
+  roundness: 30,
+  itemPadding: 16,
+  gridColumns: 6,
+  minSpacing: 48,
+  useAutoColumns: true,
+  searchBarWidth: 800,
+  searchBarHeight: 64,
+  searchBarRoundness: 100,
+  searchBarTop: 40,
+  glassBlur: 64,
+  glassOpacity: 70,
+  wallpaper: {
+    type: 'none' as 'none' | 'bing' | 'unsplash' | 'file',
+    url: '',
+  }
+};
+
+const DEFAULT_WEBDAV_SETTINGS = {
+  url: '',
+  username: '',
+  password: '',
+  path: '/zenmark_backup.json',
+  autoSync: false
+};
+
+const DEFAULT_SEARCH_ENGINES = [
   { name: "Google", url: "https://www.google.com/search?q=", icon: "https://www.google.com/favicon.ico" },
   { name: "Bing", url: "https://www.bing.com/search?q=", icon: "https://www.bing.com/favicon.ico" },
   { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=", icon: "https://duckduckgo.com/favicon.ico" },
   { name: "Baidu", url: "https://www.baidu.com/s?wd=", icon: "https://www.baidu.com/favicon.ico" },
 ];
-
-const STORAGE_KEYS = {
-  BOOKMARKS: 'zenmark_bookmarks',
-  CATEGORIES: 'zenmark_categories',
-  SETTINGS: 'zenmark_settings'
-};
 
 const DEFAULT_BOOKMARKS: Bookmark[] = [
   { id: 1, title: "Google", url: "https://www.google.com", category: "Search", created_at: new Date().toISOString() },
@@ -88,7 +121,9 @@ const DEFAULT_CATEGORIES = ["Search", "Tech", "Video", "Social", "AI", "Design",
 export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedEngine, setSelectedEngine] = useState(SEARCH_ENGINES[0]);
+  const [searchEngines, setSearchEngines] = useState(DEFAULT_SEARCH_ENGINES);
+  const [selectedEngine, setSelectedEngine] = useState(DEFAULT_SEARCH_ENGINES[0]);
+  const [newEngine, setNewEngine] = useState({ name: "", url: "", icon: "" });
   const [isAdding, setIsAdding] = useState(false);
   const [isAddingFolder, setIsAddingFolder] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -108,20 +143,30 @@ export default function App() {
 
   const [newCategoryName, setNewCategoryName] = useState("");
 
-  const [uiSettings, setUiSettings] = useState({
-    itemSize: 120,
-    roundness: 30,
-    itemPadding: 16,
-    gridColumns: 6,
-    minSpacing: 48,
-    useAutoColumns: true,
-    wallpaper: {
-      type: 'none',
-      url: '',
-    }
-  });
+  const [uiSettings, setUiSettings] = useState(DEFAULT_UI_SETTINGS);
+  const [webdavSettings, setWebdavSettings] = useState(DEFAULT_WEBDAV_SETTINGS);
+  const [isFirstLoad, setIsFirstLoad] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const htmlFileInputRef = useRef<HTMLInputElement>(null);
+  const wallpaperFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleWallpaperFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setUiSettings(prev => ({ 
+          ...prev, 
+          wallpaper: { 
+            type: 'file', 
+            url: reader.result as string 
+          } 
+        }));
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -139,6 +184,8 @@ export default function App() {
     const savedBookmarks = localStorage.getItem(STORAGE_KEYS.BOOKMARKS);
     const savedCategories = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
     const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    const savedEngines = localStorage.getItem(STORAGE_KEYS.SEARCH_ENGINES);
+    const savedWebdav = localStorage.getItem(STORAGE_KEYS.WEBDAV);
 
     if (savedBookmarks) {
       setBookmarks(JSON.parse(savedBookmarks));
@@ -156,8 +203,38 @@ export default function App() {
       setUiSettings(JSON.parse(savedSettings));
     }
 
+    if (savedEngines) {
+      const engines = JSON.parse(savedEngines);
+      setSearchEngines(engines);
+      setSelectedEngine(engines[0] || DEFAULT_SEARCH_ENGINES[0]);
+    }
+
+    if (savedWebdav) {
+      const webdav = JSON.parse(savedWebdav);
+      setWebdavSettings(webdav);
+      
+      // Auto-restore on first load if enabled
+      if (webdav.autoSync && webdav.url && webdav.username && webdav.password) {
+        setTimeout(() => {
+          handleWebdavRestore(true); // silent restore
+        }, 1000);
+      }
+    }
+
     setIsLoading(false);
+    setIsFirstLoad(false);
   }, []);
+
+  // Auto-backup logic
+  useEffect(() => {
+    if (isLoading || isFirstLoad || !webdavSettings.autoSync || !webdavSettings.url) return;
+
+    const timeoutId = setTimeout(() => {
+      handleWebdavBackup(true); // silent backup
+    }, 5000); // 5 second debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [bookmarks, categoryOrder, uiSettings, searchEngines, webdavSettings.autoSync, isLoading, isFirstLoad]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -176,6 +253,18 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(uiSettings));
     }
   }, [uiSettings, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.SEARCH_ENGINES, JSON.stringify(searchEngines));
+    }
+  }, [searchEngines, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.WEBDAV, JSON.stringify(webdavSettings));
+    }
+  }, [webdavSettings, isLoading]);
 
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
@@ -257,15 +346,39 @@ export default function App() {
     setBookmarks(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
   };
 
+  const updateBookmarkCategory = (id: number, category: string) => {
+    setBookmarks(prev => prev.map(b => b.id === id ? { ...b, category } : b));
+  };
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      window.open(`${selectedEngine.url}${encodeURIComponent(searchQuery)}`, "_blank");
+      const url = selectedEngine.url.includes('%s') 
+        ? selectedEngine.url.replace('%s', encodeURIComponent(searchQuery))
+        : `${selectedEngine.url}${encodeURIComponent(searchQuery)}`;
+      window.open(url, "_blank");
     }
   };
 
-  const updateBookmarkCategory = (id: number, category: string) => {
-    setBookmarks(prev => prev.map(b => b.id === id ? { ...b, category } : b));
+  const addSearchEngine = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEngine.name || !newEngine.url) return;
+    
+    const engine = {
+      ...newEngine,
+      icon: newEngine.icon || `https://www.google.com/s2/favicons?domain=${new URL(newEngine.url).hostname}&sz=64`
+    };
+    
+    setSearchEngines([...searchEngines, engine]);
+    setNewEngine({ name: "", url: "", icon: "" });
+  };
+
+  const deleteSearchEngine = (name: string) => {
+    const updated = searchEngines.filter(e => e.name !== name);
+    setSearchEngines(updated);
+    if (selectedEngine.name === name) {
+      setSelectedEngine(updated[0] || DEFAULT_SEARCH_ENGINES[0]);
+    }
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -440,12 +553,19 @@ export default function App() {
 
   const standaloneBookmarks = bookmarks.filter(b => !b.category || b.category === 'Uncategorized');
 
+  const handleResetUI = () => {
+    if (confirm("Are you sure you want to reset all UI settings to default?")) {
+      setUiSettings(DEFAULT_UI_SETTINGS);
+    }
+  };
+
   const handleExport = () => {
     const data = {
       bookmarks,
       categories: categoryOrder,
       settings: uiSettings,
-      version: '1.0',
+      searchEngines,
+      version: '1.1',
       exportDate: new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -453,6 +573,50 @@ export default function App() {
     const a = document.createElement("a");
     a.href = url;
     a.download = `zenmark_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportHTML = () => {
+    let html = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<!-- This is an automatically generated file.
+     It will be read and overwritten.
+     DO NOT EDIT! -->
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+<DL><p>
+`;
+
+    // Group bookmarks by category
+    const grouped = categoryOrder.reduce((acc, cat) => {
+      acc[cat] = bookmarks.filter(b => b.category === cat);
+      return acc;
+    }, {} as Record<string, Bookmark[]>);
+
+    categoryOrder.forEach(cat => {
+      if (grouped[cat].length > 0) {
+        html += `    <DT><H3 ADD_DATE="${Math.floor(Date.now()/1000)}" LAST_MODIFIED="${Math.floor(Date.now()/1000)}">${cat}</H3>\n    <DL><p>\n`;
+        grouped[cat].forEach(b => {
+          html += `        <DT><A HREF="${b.url}" ADD_DATE="${Math.floor(Date.now()/1000)}">${b.title}</A>\n`;
+        });
+        html += `    </DL><p>\n`;
+      }
+    });
+
+    // Standalone
+    const standalone = bookmarks.filter(b => !b.category || b.category === 'Uncategorized');
+    standalone.forEach(b => {
+      html += `    <DT><A HREF="${b.url}" ADD_DATE="${Math.floor(Date.now()/1000)}">${b.title}</A>\n`;
+    });
+
+    html += `</DL><p>`;
+
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `zenmark_bookmarks_${new Date().toISOString().split('T')[0]}.html`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -476,6 +640,9 @@ export default function App() {
         if (data.settings) {
           setUiSettings(prev => ({ ...prev, ...data.settings }));
         }
+        if (data.searchEngines && Array.isArray(data.searchEngines)) {
+          setSearchEngines(data.searchEngines);
+        }
         
         alert("Import successful!");
       } catch (err) {
@@ -484,7 +651,163 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    e.target.value = ''; // Reset input
+    e.target.value = '';
+  };
+
+  const handleImportHTML = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(content, "text/html");
+        const links = doc.querySelectorAll("a");
+        
+        const newBookmarks: Bookmark[] = [];
+        const newCategories = new Set<string>();
+
+        links.forEach((link, index) => {
+          const url = link.getAttribute("href");
+          const title = link.textContent || "Untitled";
+          
+          // Try to find category (H3 in parent DL)
+          let category = "Uncategorized";
+          let parent = link.parentElement;
+          while (parent) {
+            const h3 = parent.previousElementSibling;
+            if (h3 && h3.tagName === 'H3') {
+              category = h3.textContent || "Uncategorized";
+              break;
+            }
+            parent = parent.parentElement;
+          }
+
+          if (url) {
+            newBookmarks.push({
+              id: Date.now() + index,
+              title,
+              url,
+              category,
+              created_at: new Date().toISOString()
+            });
+            if (category !== "Uncategorized") {
+              newCategories.add(category);
+            }
+          }
+        });
+
+        if (newBookmarks.length > 0) {
+          setBookmarks(newBookmarks);
+          setCategoryOrder(Array.from(newCategories));
+          setUiSettings(DEFAULT_UI_SETTINGS); // Reset UI for HTML import
+          alert(`Successfully imported ${newBookmarks.length} bookmarks! UI settings have been reset to default.`);
+        } else {
+          alert("No bookmarks found in the HTML file.");
+        }
+      } catch (err) {
+        console.error("Failed to parse HTML bookmarks:", err);
+        alert("Failed to import HTML. Please make sure it's a valid Netscape Bookmark file.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleWebdavBackup = async (silent = false) => {
+    if (!webdavSettings.url) {
+      if (!silent) {
+        alert("Please configure WebDAV settings first.");
+        setSettingsTab('data');
+      }
+      return;
+    }
+
+    try {
+      const data = {
+        bookmarks,
+        categories: categoryOrder,
+        settings: uiSettings,
+        searchEngines,
+        version: '1.1',
+        exportDate: new Date().toISOString()
+      };
+
+      const auth = btoa(`${webdavSettings.username}:${webdavSettings.password}`);
+      const fullUrl = webdavSettings.url.endsWith('/') 
+        ? webdavSettings.url + webdavSettings.path.substring(1)
+        : webdavSettings.url + webdavSettings.path;
+
+      const response = await fetch(fullUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data, null, 2)
+      });
+
+      if (response.ok) {
+        if (!silent) alert("WebDAV Backup successful!");
+      } else {
+        throw new Error(`WebDAV Error: ${response.status} ${response.statusText}`);
+      }
+    } catch (err) {
+      console.error("WebDAV Backup failed:", err);
+      if (!silent) alert(`WebDAV Backup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleWebdavRestore = async (silent = false) => {
+    if (!webdavSettings.url) {
+      if (!silent) {
+        alert("Please configure WebDAV settings first.");
+        setSettingsTab('data');
+      }
+      return;
+    }
+
+    if (!silent && !confirm("This will overwrite all current bookmarks and settings. Continue?")) return;
+
+    try {
+      const auth = btoa(`${webdavSettings.username}:${webdavSettings.password}`);
+      const fullUrl = webdavSettings.url.endsWith('/') 
+        ? webdavSettings.url + webdavSettings.path.substring(1)
+        : webdavSettings.url + webdavSettings.path;
+
+      const response = await fetch(fullUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${auth}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.bookmarks && Array.isArray(data.bookmarks)) {
+          setBookmarks(data.bookmarks);
+        }
+        if (data.categories && Array.isArray(data.categories)) {
+          setCategoryOrder(data.categories);
+        }
+        if (data.settings) {
+          setUiSettings(prev => ({ ...prev, ...data.settings }));
+        }
+        if (data.searchEngines && Array.isArray(data.searchEngines)) {
+          setSearchEngines(data.searchEngines);
+        }
+        
+        if (!silent) alert("WebDAV Restore successful!");
+      } else {
+        throw new Error(`WebDAV Error: ${response.status} ${response.statusText}`);
+      }
+    } catch (err) {
+      console.error("WebDAV Restore failed:", err);
+      if (!silent) alert(`WebDAV Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   return (
@@ -498,7 +821,7 @@ export default function App() {
             className="w-full h-full object-cover"
             referrerPolicy="no-referrer"
           />
-          <div className="absolute inset-0 bg-black/10 backdrop-blur-[2px]" />
+          <div className="absolute inset-0 bg-black/5" />
         </div>
       )}
       
@@ -512,22 +835,42 @@ export default function App() {
         >
           <main className="max-w-[1600px] mx-auto p-12 lg:p-20 pt-24">
           {/* Hero Search Section */}
-          <div className={`max-w-2xl mx-auto mb-24 transition-all duration-300 ${isEngineDropdownOpen ? 'relative z-50' : 'relative z-10'}`}>
+          <div 
+            className="mx-auto mb-24 transition-all duration-500"
+            style={{ 
+              maxWidth: `${uiSettings.searchBarWidth}px`,
+              marginTop: `${uiSettings.searchBarTop}px`,
+              zIndex: isEngineDropdownOpen ? 50 : 10,
+              position: 'relative'
+            }}
+          >
             <form onSubmit={handleSearchSubmit} className="relative group">
-              <div className="absolute inset-0 bg-blue-500/10 blur-3xl group-focus-within:bg-blue-500/20 transition-all duration-700 opacity-50" />
-              <div className="relative flex items-center bg-white/80 backdrop-blur-2xl rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.06)] border border-black/5 transition-all duration-500 group-focus-within:shadow-[0_30px_60px_rgba(0,0,0,0.1)] group-focus-within:-translate-y-1">
+              <div className="absolute -inset-1 bg-gradient-to-r from-blue-500/20 via-indigo-500/20 to-purple-500/20 blur-2xl group-focus-within:opacity-100 opacity-0 transition-opacity duration-700" />
+              <div 
+                className="relative flex items-center shadow-[0_8px_32px_rgba(0,0,0,0.04)] border border-black/5 transition-all duration-500 group-focus-within:shadow-[0_20px_60px_rgba(0,0,0,0.08)] group-focus-within:-translate-y-1"
+                style={{ 
+                  borderRadius: `${(uiSettings.searchBarHeight / 2) * (uiSettings.searchBarRoundness / 100)}px`,
+                  height: `${uiSettings.searchBarHeight}px`,
+                  backdropFilter: `blur(${uiSettings.glassBlur}px)`,
+                  backgroundColor: `rgba(255, 255, 255, ${uiSettings.glassOpacity / 100})`
+                }}
+              >
                 <div 
-                  className="relative"
+                  className="relative h-full flex items-center"
                   onMouseEnter={() => setIsEngineDropdownOpen(true)}
                   onMouseLeave={() => setIsEngineDropdownOpen(false)}
                 >
                   <button
                     type="button"
                     onClick={() => setIsEngineDropdownOpen(!isEngineDropdownOpen)}
-                    className="flex items-center gap-3 pl-8 pr-6 py-6 hover:bg-black/5 transition-colors rounded-l-[2.5rem]"
+                    className="flex items-center gap-3 px-6 h-full hover:bg-black/5 transition-colors"
+                    style={{ 
+                      borderTopLeftRadius: `${(uiSettings.searchBarHeight / 2) * (uiSettings.searchBarRoundness / 100)}px`, 
+                      borderBottomLeftRadius: `${(uiSettings.searchBarHeight / 2) * (uiSettings.searchBarRoundness / 100)}px` 
+                    }}
                   >
-                    <img src={selectedEngine.icon} alt="" className="w-5 h-5 rounded-sm" />
-                    <ChevronDown className={`w-4 h-4 text-black/20 transition-transform ${isEngineDropdownOpen ? 'rotate-180' : ''}`} />
+                    <img src={selectedEngine.icon} alt="" className="w-8 h-8 rounded-xl shadow-sm" />
+                    <ChevronDown className={`w-4 h-4 text-black/20 transition-transform duration-300 ${isEngineDropdownOpen ? 'rotate-180' : ''}`} />
                   </button>
 
                   <AnimatePresence>
@@ -536,9 +879,9 @@ export default function App() {
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                        className="absolute top-full left-0 mt-2 bg-white/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-40 p-2 flex gap-2"
+                        className="absolute top-full left-4 mt-3 bg-white/90 backdrop-blur-2xl rounded-3xl shadow-2xl border border-black/5 overflow-hidden z-40 p-2 flex gap-1.5 min-w-max"
                       >
-                        {SEARCH_ENGINES.map((eng) => (
+                        {searchEngines.map((eng) => (
                           <button
                             key={eng.name}
                             type="button"
@@ -546,26 +889,34 @@ export default function App() {
                               setSelectedEngine(eng);
                               setIsEngineDropdownOpen(false);
                             }}
-                            className={`flex flex-col items-center gap-2 px-4 py-3 rounded-xl transition-all ${selectedEngine.name === eng.name ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/20' : 'hover:bg-black/5 text-black/60'}`}
+                            title={eng.name}
+                            className={`p-3 rounded-2xl transition-all duration-300 ${selectedEngine.name === eng.name ? 'bg-blue-500 shadow-lg shadow-blue-500/20 scale-110' : 'hover:bg-black/5'}`}
                           >
-                            <img src={eng.icon} alt="" className={`w-6 h-6 rounded-sm p-0.5 ${selectedEngine.name === eng.name ? 'bg-white' : 'bg-black/5'}`} />
-                            <span className="text-[10px] font-bold">{eng.name}</span>
+                            <img src={eng.icon} alt={eng.name} className={`w-8 h-8 rounded-lg ${selectedEngine.name === eng.name ? 'brightness-110' : ''}`} />
                           </button>
                         ))}
                       </motion.div>
                     )}
                   </AnimatePresence>
                 </div>
-                <div className="w-px h-10 bg-black/5" />
-                <div className="relative flex-1">
-                  <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-6 h-6 text-black/20 group-focus-within:text-blue-500 transition-colors" />
+                <div className="w-px h-1/2 bg-black/5" />
+                <div className="relative flex-1 h-full">
                   <input 
                     type="text" 
-                    placeholder={`Search ${selectedEngine.name} or your bookmarks...`} 
-                    className="w-full pl-16 pr-8 py-6 bg-transparent text-xl font-medium outline-none placeholder:text-black/10"
+                    placeholder={`Search with ${selectedEngine.name}...`}
+                    className="w-full h-full px-6 bg-transparent outline-none text-lg font-medium placeholder:text-black/20"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
+                  {searchQuery && (
+                    <button 
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2 hover:bg-black/5 rounded-full text-black/20 hover:text-black transition-all"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             </form>
@@ -656,7 +1007,10 @@ export default function App() {
               transition={{ type: "spring", damping: 30, stiffness: 300 }}
               className="relative w-full max-w-6xl"
             >
-              <DroppableArea id="folder-content-area" className="w-full h-full bg-white/10 backdrop-blur-md rounded-[4rem] p-12 sm:p-20 shadow-[0_50px_100px_rgba(0,0,0,0.3)] border border-white/10">
+              <DroppableArea 
+                id="folder-content-area" 
+                className="w-full h-full bg-white/10 backdrop-blur-md rounded-[4rem] p-12 sm:p-20 shadow-[0_50px_100px_rgba(0,0,0,0.3)] border border-white/10"
+              >
                 <div className="flex flex-col items-center mb-16">
                   <h2 className="text-5xl font-extrabold tracking-tight text-white drop-shadow-2xl mb-4">
                     {activeFolder}
@@ -929,6 +1283,100 @@ export default function App() {
                         )}
                       </div>
                     </div>
+
+                    <div className="space-y-6">
+                      <h4 className="text-xs font-bold uppercase tracking-widest text-black/30">Search Bar</h4>
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Width</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.searchBarWidth}px</span>
+                          </div>
+                          <input 
+                            type="range" min="400" max="1200" step="10"
+                            value={uiSettings.searchBarWidth}
+                            onChange={(e) => setUiSettings({ ...uiSettings, searchBarWidth: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Height</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.searchBarHeight}px</span>
+                          </div>
+                          <input 
+                            type="range" min="48" max="96" step="2"
+                            value={uiSettings.searchBarHeight}
+                            onChange={(e) => setUiSettings({ ...uiSettings, searchBarHeight: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Roundness</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.searchBarRoundness}%</span>
+                          </div>
+                          <input 
+                            type="range" min="0" max="100" step="1"
+                            value={uiSettings.searchBarRoundness}
+                            onChange={(e) => setUiSettings({ ...uiSettings, searchBarRoundness: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Top Margin</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.searchBarTop}px</span>
+                          </div>
+                          <input 
+                            type="range" min="0" max="200" step="5"
+                            value={uiSettings.searchBarTop}
+                            onChange={(e) => setUiSettings({ ...uiSettings, searchBarTop: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <h4 className="text-xs font-bold uppercase tracking-widest text-black/30">Glass Effect</h4>
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Blur Intensity</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.glassBlur}px</span>
+                          </div>
+                          <input 
+                            type="range" min="0" max="64" step="1"
+                            value={uiSettings.glassBlur}
+                            onChange={(e) => setUiSettings({ ...uiSettings, glassBlur: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="text-sm font-bold">Opacity</label>
+                            <span className="text-xs font-mono bg-black/5 px-2 py-1 rounded-md">{uiSettings.glassOpacity}%</span>
+                          </div>
+                          <input 
+                            type="range" min="0" max="100" step="1"
+                            value={uiSettings.glassOpacity}
+                            onChange={(e) => setUiSettings({ ...uiSettings, glassOpacity: parseInt(e.target.value) })}
+                            className="w-full h-1.5 bg-black/5 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-6 border-t border-black/5">
+                      <button 
+                        onClick={handleResetUI}
+                        className="flex items-center gap-2 px-6 py-3 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-all"
+                      >
+                        <RefreshCcw className="w-4 h-4" />
+                        Reset UI to Default
+                      </button>
+                    </div>
                   </div>
                 )}
                 
@@ -939,14 +1387,19 @@ export default function App() {
                         { id: 'none', label: 'Default', color: 'bg-gray-200' },
                         { id: 'bing', label: 'Bing Daily', color: 'bg-blue-400' },
                         { id: 'unsplash', label: 'Unsplash Random', color: 'bg-indigo-400' },
+                        { id: 'file', label: 'Local File', color: 'bg-green-400' },
                         { id: 'local', label: 'Custom URL', color: 'bg-purple-400' },
                       ].map(wp => (
                         <button
                           key={wp.id}
                           onClick={() => {
+                            if (wp.id === 'file') {
+                              wallpaperFileInputRef.current?.click();
+                              return;
+                            }
                             let url = '';
-                            if (wp.id === 'bing') url = 'https://bing.biturl.top/?resolution=1920&format=image&index=0&mkt=zh-CN';
-                            if (wp.id === 'unsplash') url = 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1920&q=80';
+                            if (wp.id === 'bing') url = 'https://bing.biturl.top/?resolution=3840&format=image&index=0&mkt=zh-CN';
+                            if (wp.id === 'unsplash') url = 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=3840&q=100';
                             setUiSettings({ ...uiSettings, wallpaper: { type: wp.id, url } });
                           }}
                           className={`p-6 rounded-2xl border-2 transition-all flex flex-col items-center gap-3 ${uiSettings.wallpaper.type === wp.id ? 'border-blue-500 bg-blue-50' : 'border-black/5 hover:border-black/10'}`}
@@ -956,6 +1409,14 @@ export default function App() {
                         </button>
                       ))}
                     </div>
+
+                    <input 
+                      type="file" 
+                      ref={wallpaperFileInputRef} 
+                      onChange={handleWallpaperFileChange} 
+                      className="hidden" 
+                      accept="image/*" 
+                    />
 
                     {uiSettings.wallpaper.type === 'local' && (
                       <div className="space-y-4 p-6 bg-black/5 rounded-2xl">
@@ -972,40 +1433,183 @@ export default function App() {
                   </div>
                 )}
                 
-                {settingsTab === 'data' && (
-                  <div className="space-y-8">
-                    <div className="p-6 bg-blue-50 rounded-2xl border border-blue-100">
-                      <h4 className="font-bold text-blue-900 mb-2">Cloud Sync</h4>
-                      <p className="text-sm text-blue-700 mb-4">Sync your bookmarks across all your devices automatically.</p>
-                      <button className="bg-blue-600 text-white px-6 py-2 rounded-xl text-sm font-bold">Enable Sync</button>
+                {settingsTab === 'search' && (
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      {searchEngines.map(eng => (
+                        <div key={eng.name} className="flex items-center justify-between p-4 bg-black/5 rounded-2xl group">
+                          <div className="flex items-center gap-4">
+                            <img src={eng.icon} alt="" className="w-8 h-8 rounded-lg shadow-sm" />
+                            <div>
+                              <p className="text-sm font-bold">{eng.name}</p>
+                              <p className="text-[10px] text-black/40 truncate max-w-[180px]">{eng.url}</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => deleteSearchEngine(eng.name)}
+                            className="p-2 text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-50 rounded-xl"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
 
-                    <div className="space-y-4">
-                      <h4 className="text-xs font-bold uppercase tracking-widest text-black/30">Import & Export</h4>
-                      <div className="grid grid-cols-2 gap-4">
+                    <div className="p-6 bg-black/5 rounded-3xl space-y-4">
+                      <div className="flex items-center gap-2 px-1">
+                        <Plus className="w-4 h-4 text-black/30" />
+                        <span className="text-sm font-bold">Add Engine</span>
+                      </div>
+                      <form onSubmit={addSearchEngine} className="space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <input 
+                            type="text" 
+                            placeholder="Name"
+                            className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none text-sm"
+                            value={newEngine.name}
+                            onChange={e => setNewEngine({...newEngine, name: e.target.value})}
+                            required
+                          />
+                          <input 
+                            type="text" 
+                            placeholder="Icon URL"
+                            className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none text-sm"
+                            value={newEngine.icon}
+                            onChange={e => setNewEngine({...newEngine, icon: e.target.value})}
+                          />
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Search URL (use %s for query)"
+                          className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none text-sm"
+                          value={newEngine.url}
+                          onChange={e => setNewEngine({...newEngine, url: e.target.value})}
+                          required
+                        />
                         <button 
-                          onClick={handleExport}
-                          className="flex flex-col items-center gap-3 p-6 bg-black/5 rounded-2xl hover:bg-black/10 transition-all group"
+                          type="submit"
+                          className="w-full bg-black text-white py-2.5 rounded-xl text-xs font-bold hover:opacity-90 transition-all"
                         >
-                          <Download className="w-6 h-6 text-black/40 group-hover:text-black transition-colors" />
-                          <span className="text-sm font-bold">Export HTML</span>
+                          Add Engine
                         </button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+                
+                {settingsTab === 'data' && (
+                  <div className="space-y-6">
+                    {/* WebDAV Section */}
+                    <div className="p-6 bg-black/5 rounded-3xl space-y-6">
+                      <div className="flex items-center justify-between px-1">
+                        <div className="flex items-center gap-2">
+                          <Cloud className="w-4 h-4 text-blue-500" />
+                          <span className="text-sm font-bold">WebDAV</span>
+                        </div>
                         <button 
-                          onClick={() => fileInputRef.current?.click()}
-                          className="flex flex-col items-center gap-3 p-6 bg-black/5 rounded-2xl hover:bg-black/10 transition-all group"
+                          onClick={() => setWebdavSettings({ ...webdavSettings, autoSync: !webdavSettings.autoSync })}
+                          className={`w-8 h-4 rounded-full transition-all relative ${webdavSettings.autoSync ? 'bg-blue-600' : 'bg-black/10'}`}
                         >
-                          <Upload className="w-6 h-6 text-black/40 group-hover:text-black transition-colors" />
-                          <span className="text-sm font-bold">Import HTML</span>
+                          <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${webdavSettings.autoSync ? 'left-4.5' : 'left-0.5'}`} />
                         </button>
                       </div>
-                      <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        onChange={handleImport} 
-                        className="hidden" 
-                        accept=".html" 
-                      />
+                      
+                      <div className="grid grid-cols-1 gap-4">
+                        <input 
+                          type="text" 
+                          placeholder="Server URL"
+                          className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+                          value={webdavSettings.url}
+                          onChange={e => setWebdavSettings({...webdavSettings, url: e.target.value})}
+                        />
+                        <div className="grid grid-cols-2 gap-4">
+                          <input 
+                            type="text" 
+                            placeholder="User"
+                            className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+                            value={webdavSettings.username}
+                            onChange={e => setWebdavSettings({...webdavSettings, username: e.target.value})}
+                          />
+                          <input 
+                            type="password" 
+                            placeholder="Pass"
+                            className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+                            value={webdavSettings.password}
+                            onChange={e => setWebdavSettings({...webdavSettings, password: e.target.value})}
+                          />
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Path"
+                          className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+                          value={webdavSettings.path}
+                          onChange={e => setWebdavSettings({...webdavSettings, path: e.target.value})}
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleWebdavRestore(false)}
+                          className="flex-1 py-2.5 bg-white text-black/60 rounded-xl text-xs font-bold hover:bg-black/5 transition-all border border-black/5"
+                        >
+                          Restore
+                        </button>
+                        <button 
+                          onClick={() => handleWebdavBackup(false)}
+                          className="flex-1 py-2.5 bg-black text-white rounded-xl text-xs font-bold hover:opacity-90 transition-all"
+                        >
+                          Backup
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Local Backup Section */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-white border border-black/5 rounded-2xl flex flex-col gap-4">
+                        <div className="flex items-center gap-3">
+                          <FileJson className="w-4 h-4 text-blue-500" />
+                          <span className="text-sm font-bold">JSON</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            className="flex-1 py-2 bg-black/5 rounded-lg text-[10px] font-bold hover:bg-black/10 transition-all"
+                          >
+                            Import
+                          </button>
+                          <button 
+                            onClick={handleExport}
+                            className="flex-1 py-2 bg-black text-white rounded-lg text-[10px] font-bold hover:opacity-90 transition-all"
+                          >
+                            Export
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-white border border-black/5 rounded-2xl flex flex-col gap-4">
+                        <div className="flex items-center gap-3">
+                          <FileCode className="w-4 h-4 text-orange-500" />
+                          <span className="text-sm font-bold">HTML</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => htmlFileInputRef.current?.click()}
+                            className="flex-1 py-2 bg-black/5 rounded-lg text-[10px] font-bold hover:bg-black/10 transition-all"
+                          >
+                            Import
+                          </button>
+                          <button 
+                            onClick={handleExportHTML}
+                            className="flex-1 py-2 bg-black text-white rounded-lg text-[10px] font-bold hover:opacity-90 transition-all"
+                          >
+                            Export
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <input type="file" ref={fileInputRef} onChange={handleImport} className="hidden" accept=".json" />
+                    <input type="file" ref={htmlFileInputRef} onChange={handleImportHTML} className="hidden" accept=".html" />
                   </div>
                 )}
               </div>
@@ -1404,10 +2008,10 @@ export default function App() {
 );
 }
 
-function DroppableArea({ id, children, className }: { id: string, children: React.ReactNode, className?: string }) {
+function DroppableArea({ id, children, className, style }: { id: string, children: React.ReactNode, className?: string, style?: React.CSSProperties }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
-    <div ref={setNodeRef} className={className || `w-full transition-all duration-500 ${isOver ? 'bg-black/5 rounded-[3rem] p-8 -m-8' : ''}`}>
+    <div ref={setNodeRef} className={className || `w-full transition-all duration-500 ${isOver ? 'bg-black/5 rounded-[3rem] p-8 -m-8' : ''}`} style={style}>
       {children}
     </div>
   );
@@ -1455,11 +2059,13 @@ function FolderItem({ category, items, onClick, onRename, onContextMenu, setting
         ref={setNodeRef}
         {...attributes}
         {...listeners}
-        className={`relative w-full aspect-square mb-5 bg-white/40 backdrop-blur-xl border grid grid-cols-3 grid-rows-3 transition-all duration-500 group-hover:bg-white/60 group-hover:shadow-[0_25px_60px_rgba(0,0,0,0.12)] group-hover:-translate-y-2 active:scale-95 ${isPreciseOver ? 'border-blue-500 bg-blue-500/15 ring-4 ring-blue-500/20' : 'border-black/5'}`}
+        className={`relative w-full aspect-square mb-5 border grid grid-cols-3 grid-rows-3 transition-all duration-500 group-hover:bg-white/60 group-hover:shadow-[0_25px_60px_rgba(0,0,0,0.12)] group-hover:-translate-y-2 active:scale-95 ${isPreciseOver ? 'border-blue-500 bg-blue-500/15 ring-4 ring-blue-500/20' : 'border-black/5'}`}
         style={{ 
           borderRadius: `${borderRadius}px`,
           padding: `${settings.itemPadding}px`,
-          gap: `${settings.itemPadding / 2}px`
+          gap: `${settings.itemPadding / 2}px`,
+          backdropFilter: `blur(${settings.glassBlur}px)`,
+          backgroundColor: `rgba(255, 255, 255, ${settings.glassOpacity / 100})`
         }}
       >
         {/* 3x3 Grid of Mini Icons - only show existing ones */}
