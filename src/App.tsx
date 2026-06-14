@@ -20,7 +20,8 @@ import {
   Cloud,
   RefreshCcw,
   FileJson,
-  FileCode
+  FileCode,
+  Database
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -66,7 +67,8 @@ const STORAGE_KEYS = {
   CATEGORIES: 'zenmark_categories',
   SETTINGS: 'zenmark_settings',
   SEARCH_ENGINES: 'zenmark_search_engines',
-  WEBDAV: 'zenmark_webdav'
+  WEBDAV: 'zenmark_webdav',
+  CFKV: 'zenmark_cfkv'
 };
 
 const DEFAULT_UI_SETTINGS = {
@@ -93,6 +95,12 @@ const DEFAULT_WEBDAV_SETTINGS = {
   username: '',
   password: '',
   path: '/zenmark_backup.json',
+  autoSync: false
+};
+
+const DEFAULT_CFKV_SETTINGS = {
+  url: '',
+  password: '',
   autoSync: false
 };
 
@@ -145,6 +153,7 @@ export default function App() {
 
   const [uiSettings, setUiSettings] = useState(DEFAULT_UI_SETTINGS);
   const [webdavSettings, setWebdavSettings] = useState(DEFAULT_WEBDAV_SETTINGS);
+  const [cfKvSettings, setCfKvSettings] = useState(DEFAULT_CFKV_SETTINGS);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -186,6 +195,7 @@ export default function App() {
     const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     const savedEngines = localStorage.getItem(STORAGE_KEYS.SEARCH_ENGINES);
     const savedWebdav = localStorage.getItem(STORAGE_KEYS.WEBDAV);
+    const savedCfKv = localStorage.getItem(STORAGE_KEYS.CFKV);
 
     if (savedBookmarks) {
       setBookmarks(JSON.parse(savedBookmarks));
@@ -221,6 +231,18 @@ export default function App() {
       }
     }
 
+    if (savedCfKv) {
+      const cfKv = JSON.parse(savedCfKv);
+      setCfKvSettings(cfKv);
+      
+      // Auto-restore on first load if enabled
+      if (cfKv.autoSync && cfKv.url && cfKv.password) {
+        setTimeout(() => {
+          handleCfKvRestore(true); // silent restore
+        }, 1500); // slightly staggered
+      }
+    }
+
     setIsLoading(false);
     setIsFirstLoad(false);
   }, []);
@@ -235,6 +257,17 @@ export default function App() {
 
     return () => clearTimeout(timeoutId);
   }, [bookmarks, categoryOrder, uiSettings, searchEngines, webdavSettings.autoSync, isLoading, isFirstLoad]);
+
+  // Cloudflare KV Auto-backup logic
+  useEffect(() => {
+    if (isLoading || isFirstLoad || !cfKvSettings.autoSync || !cfKvSettings.url) return;
+
+    const timeoutId = setTimeout(() => {
+      handleCfKvBackup(true); // silent backup
+    }, 5000); // 5 second debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [bookmarks, categoryOrder, uiSettings, searchEngines, cfKvSettings.autoSync, isLoading, isFirstLoad]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -265,6 +298,12 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.WEBDAV, JSON.stringify(webdavSettings));
     }
   }, [webdavSettings, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem(STORAGE_KEYS.CFKV, JSON.stringify(cfKvSettings));
+    }
+  }, [cfKvSettings, isLoading]);
 
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
@@ -807,6 +846,92 @@ export default function App() {
     } catch (err) {
       console.error("WebDAV Restore failed:", err);
       if (!silent) alert(`WebDAV Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleCfKvBackup = async (silent = false) => {
+    if (!cfKvSettings.url) {
+      if (!silent) {
+        alert("Please configure Cloudflare KV settings first.");
+        setSettingsTab('data');
+      }
+      return;
+    }
+
+    try {
+      const data = {
+        bookmarks,
+        categories: categoryOrder,
+        settings: uiSettings,
+        searchEngines,
+        version: '1.1',
+        exportDate: new Date().toISOString()
+      };
+
+      const response = await fetch(cfKvSettings.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Sync-Password': cfKvSettings.password
+        },
+        body: JSON.stringify(data)
+      });
+
+      if (response.ok) {
+        if (!silent) alert("Cloudflare KV Backup successful!");
+      } else {
+        const text = await response.text();
+        throw new Error(`Cloudflare KV Error: ${response.status} ${text || response.statusText}`);
+      }
+    } catch (err) {
+      console.error("Cloudflare KV Backup failed:", err);
+      if (!silent) alert(`Cloudflare KV Backup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleCfKvRestore = async (silent = false) => {
+    if (!cfKvSettings.url) {
+      if (!silent) {
+        alert("Please configure Cloudflare KV settings first.");
+        setSettingsTab('data');
+      }
+      return;
+    }
+
+    if (!silent && !confirm("This will overwrite all current bookmarks and settings. Continue?")) return;
+
+    try {
+      const response = await fetch(cfKvSettings.url, {
+        method: 'GET',
+        headers: {
+          'X-Sync-Password': cfKvSettings.password
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.bookmarks && Array.isArray(data.bookmarks)) {
+          setBookmarks(data.bookmarks);
+        }
+        if (data.categories && Array.isArray(data.categories)) {
+          setCategoryOrder(data.categories);
+        }
+        if (data.settings) {
+          setUiSettings(prev => ({ ...prev, ...data.settings }));
+        }
+        if (data.searchEngines && Array.isArray(data.searchEngines)) {
+          setSearchEngines(data.searchEngines);
+        }
+        
+        if (!silent) alert("Cloudflare KV Restore successful!");
+      } else {
+        const text = await response.text();
+        throw new Error(`Cloudflare KV Error: ${response.status} ${text || response.statusText}`);
+      }
+    } catch (err) {
+      console.error("Cloudflare KV Restore failed:", err);
+      if (!silent) alert(`Cloudflare KV Restore failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -1557,6 +1682,54 @@ export default function App() {
                         <button 
                           onClick={() => handleWebdavBackup(false)}
                           className="flex-1 py-2.5 bg-black text-white rounded-xl text-xs font-bold hover:opacity-90 transition-all"
+                        >
+                          Backup
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Cloudflare KV Section */}
+                    <div className="p-6 bg-black/5 rounded-3xl space-y-6">
+                      <div className="flex items-center justify-between px-1">
+                        <div className="flex items-center gap-2">
+                          <Database className="w-4 h-4 text-orange-500" />
+                          <span className="text-sm font-bold">Cloudflare KV</span>
+                        </div>
+                        <button 
+                          onClick={() => setCfKvSettings({ ...cfKvSettings, autoSync: !cfKvSettings.autoSync })}
+                          className={`w-8 h-4 rounded-full transition-all relative ${cfKvSettings.autoSync ? 'bg-orange-500' : 'bg-black/10'}`}
+                        >
+                          <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${cfKvSettings.autoSync ? 'left-4.5' : 'left-0.5'}`} />
+                        </button>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 gap-4">
+                        <input 
+                          type="text" 
+                          placeholder="Worker API URL"
+                          className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-orange-500/10 transition-all text-sm"
+                          value={cfKvSettings.url}
+                          onChange={e => setCfKvSettings({...cfKvSettings, url: e.target.value})}
+                        />
+                        <input 
+                          type="password" 
+                          placeholder="Sync Password"
+                          className="w-full px-4 py-2.5 bg-white border border-black/5 rounded-xl outline-none focus:ring-2 focus:ring-orange-500/10 transition-all text-sm"
+                          value={cfKvSettings.password}
+                          onChange={e => setCfKvSettings({...cfKvSettings, password: e.target.value})}
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleCfKvRestore(false)}
+                          className="flex-1 py-2.5 bg-white text-black/60 rounded-xl text-xs font-bold hover:bg-black/5 transition-all border border-black/5"
+                        >
+                          Restore
+                        </button>
+                        <button 
+                          onClick={() => handleCfKvBackup(false)}
+                          className="flex-1 py-2.5 bg-orange-500 text-white rounded-xl text-xs font-bold hover:opacity-90 transition-all"
                         >
                           Backup
                         </button>
